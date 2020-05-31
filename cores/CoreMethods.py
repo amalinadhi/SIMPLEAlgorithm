@@ -109,8 +109,8 @@ def InitializeVariables(uInlet, Lx, Ly, Linlet, Loutlet, Loc, Nx, Ny):
     p = np.zeros((Ny+1, Nx+1)).astype(float)
     pp = np.zeros((Ny+1, Nx+1)).astype(float)
 
-    u[:,:] = 1e-20
-    v[:,:] = 1e-20
+    u[:,:] = 0.0#1e-20
+    v[:,:] = 0.0#1e-20
 
     dx = Lx/(Nx-1)
     dy = Ly/(Ny-1)
@@ -180,12 +180,10 @@ def CorrectContinuity(p, pp, alpha_p, Nx, Ny):
         for j in range(1,Ny):
             p[j,i] = p[j,i] + alpha_p*pp[j,i]
 
-    #p = p + abs(np.min(p))
-
     return (p)
 
 def CorrectMomentum(u, v, pp, Apu, Apv, alpha_u, alpha_v, alpha_p, xu, yu, xv, yv, Nx, Ny):
-    S = 0#1e-8
+    S = 1e-8
     
     # Correct x
     for i in range(1, Nx-1):
@@ -262,8 +260,8 @@ def NodesVal(u, v, p, Nx, Ny):
         for i in range(Nx-1):
             vRes[j,i] = np.sqrt(uNodes[j,i]**2 + vNodes[j,i]**2)
 
-    p[:,-2] = p[:,-3]
-    p[-2,:] = p[-3,:]
+    #p[:,-2] = p[:,-3]
+    #p[-2,:] = p[-3,:]
     pNodes = p[1:-1, 1:-1]
 
     pNodes = pNodes - np.min(pNodes)
@@ -272,233 +270,176 @@ def NodesVal(u, v, p, Nx, Ny):
     return (uNodes, vNodes, pNodes, vRes)
 
 def Solveu(u, v, p, rho, mu, alpha_u, xc, yc, xu, yu, xv, yv, Nx, Ny):
-    # Initialization
-    Ap = np.zeros((Ny+1,Nx))
-    A = np.zeros((Nx-2,Nx-2))
-    B = np.zeros((Nx-2,1))
-    rmu = np.zeros((Ny+1,Nx))
+    Ap = np.zeros((Ny+1, Nx))
+    A = np.zeros((Nx-2, Nx-2))
+    B = np.zeros((Nx-1, 1))
+    rmu = np.zeros((Ny+1, Nx))
 
-    # Start sweeping the whole nodes
-    for j in range(1,Ny):
-        for i in range(1,Nx-1):
-            # GEOMETRY PREPARATION
-            # Face area
+    #u momentum
+    for j in range (1,Ny):
+        for i in range (1,Nx-1):
+            #face area
             AreaW = abs(yv[j-1,i] - yv[j,i])
             AreaE = abs(yv[j-1,i+1] - yv[j,i+1])
-            AreaN = abs(xv[j-1,i] - xv[j-1,i+1])
-            AreaS = abs(xv[j,i] - xv[j,i+1])
-
-            # Length between u-nodes
-            deltaWP = abs(xu[j,i] - xu[j,i-1])
-            deltaPE = abs(xu[j,i+1] - xu[j,i])
-            deltaNP = abs(yu[j-1,i] - yu[j,i])
-            deltaPS = abs(yu[j,i] - yu[j+1,i])
-
-            # Average cell length
-            deltaXU = 0.5*(AreaN + AreaS)
-            deltaYU = 0.5*(AreaW + AreaE)
-
-            vol = deltaXU*deltaYU                   # Cell volumes
-
-
-            # DIFFUSIVE COEFFICIENTS (D)
-            Dw = mu*AreaW/deltaWP
-            De = mu*AreaE/deltaPE
-            Dn = mu*AreaN/deltaNP
-            Ds = mu*AreaS/deltaPS
-
-
-            # CONVECTIVE COEFFICIENTS (F)
-            # average velocity
-            uw = 0.5*(u[j,i] + u[j,i-1])
-            ue = 0.5*(u[j,i+1] + u[j,i])
-            vn = 0.5*(v[j-1,i+1] + v[j-1,i])
-            vs = 0.5*(v[j,i+1] + v[j,i])
-
-            Fw = rho*uw*AreaW
+            AreaN = abs(xv[j-1,i+1] - xv[j-1,i])
+            AreaS = abs(xv[j,i+1] - xv[j,i])
+            
+            dxu = 0.5*(AreaN + AreaS)
+            dyu = 0.5*(AreaW + AreaE)
+            
+            Vol = dxu*dyu
+            
+            dWP = abs(xu[j,i] - xu[j,i-1])
+            dPE = abs(xu[j,i+1] - xu[j,i])
+            dNP = abs(yu[j-1,i] - yu[j,i])
+            dPS = abs(yu[j,i] - yu[j+1,i])
+            
+            #diffusi coef
+            G = mu
+            Dw = G*AreaW/dWP
+            De = G*AreaE/dPE
+            Ds = G*AreaS/dPS
+            Dn = G*AreaN/dNP
+            
+            #convective coef
+            uw  = 0.5*(u[j,i] 	+ u[j,i-1])
+            ue  = 0.5*(u[j,i]   + u[j,i+1])
+            vn  = 0.5*(v[j-1,i] + v[j-1,i+1])
+            vs  = 0.5*(v[j,i]   + v[j,i+1])
+            
             Fe = rho*ue*AreaE
+            Fw = rho*uw*AreaW
             Fn = rho*vn*AreaN
             Fs = rho*vs*AreaS
+            
+            deltaF  = Fe - Fw + Fn - Fs
+            
+            #Hybrid scheme
+            Aw = max(Fw, (Dw+Fw/2), 0)
+            Ae = max(-Fe, (De-Fe/2), 0)
+            An = max(-Fn, (Dn-Fn/2), 0)
+            As = max(Fs, (Ds+Fs/2), 0)
+            
+            Ap[j,i] = Ae + Aw + As + An + deltaF
+            
+            #CALCULATE SOURCE TERMS
+            #Source due to pressure gradient
+            SuPreGrad = (p[j,i]-p[j,i+1])*Vol/dxu
 
-            deltaF = Fe - Fw + Fn - Fs
-
-            # CALCULATE SOURCE TERMS (Su)
-            # Due to pressure gradient
-            Su_p = ((p[j,i] - p[j,i+1])/deltaXU)*vol
-            #Su_p = ((p[j,i] - p[j,i+1])*deltaYU)
-
-            # Due to wall
-            # If no-slip condition
-            if (j==1):
-                deltaYP = abs(yu[j,i] - yc[j-1,i])
-                Sp_wall = -mu*AreaN/deltaYP
-            elif (j==(Ny-1)):
-                deltaYP = abs(yu[j,i] - yc[j,i])
-                Sp_wall = -mu*AreaS/deltaYP
-            else:
-                Sp_wall = 0
-
-            # If slip condition, all the tau_wall = 0
-            #Sp_wall = 0
-
-            # Due to velocity gradients
-            dudx_e = (u[j,i+1] - u[j,i])/deltaPE
-            duux_w = (u[j,i] - u[j,i-1])/deltaWP
-            dvdx_n = (v[j-1,i+1] - v[j-1,i])/deltaXU
-            dvdx_s = (v[j,i+1] - v[j,i])/deltaXU
-            tau_velo_grad = mu*((dudx_e-duux_w)/deltaXU + (dvdx_n-dvdx_s)/deltaYU)
-            Su_velo_grad = tau_velo_grad*vol
-            #Su_velo_grad = 0
-
-
-            # ASSEMBLY THE COEFFICIENTS
-            # Use Hybrid Scheme
-            Aw = max(Fw, (Dw + Fw/2), 0)
-            Ae = max(-Fe, (De - Fe/2), 0)
-            An = max(-Fn, (Dn - Fn/2), 0)
-            As = max(Fs, (Ds + Fs/2), 0)
-
-            Ap[j,i] = Aw + Ae + As + An + deltaF #+ Sp_wall
-
-            # Su addition due to relaxation factor
-            Su_relax = ((1-alpha_u)/alpha_u)*Ap[j,i]*u[j,i]
-
-            # Update Ap
+            #Source due to relaxation factor
+            relaxation = ((1-alpha_u)*Ap[j,i]/alpha_u)*u[j,i]
+            
+            #UNDER RELAXATION CALCULATION
             Ap[j,i] = Ap[j,i]/alpha_u
-
-            # Assembly source (B) & A matrix
-            A[i-1,i-1] = Ap[j,i]
             
-            if (i==1):
+            #ASSEMBLY SOURCE(B) & A MATRIX
+            A[i-1,i-1]  = Ap[j,i]
+            
+            if i==1:
                 A[i-1,i] = -Ae
-                B[i-1,0] = Su_p + Su_velo_grad + Su_relax + Sp_wall*vol + An*u[j-1,i] + As*u[j+1,i] + Aw*u[j,i-1]
-            elif (i==(Nx-2)):
+                B[i-1,0] = SuPreGrad + relaxation + An*u[j-1,i] + As*u[j+1,i] + Aw*u[j,i-1]
+                
+            elif i==Nx-2:
                 A[i-1,i-2] = -Aw
-                B[i-1,0] = Su_p + Su_velo_grad + Su_relax + Sp_wall*vol + An*u[j-1,i] + As*u[j+1,i] + Ae*u[j,i+1]
+                B[i-1,0] = SuPreGrad + relaxation + An*u[j-1,i] + As*u[j+1,i] + Ae*u[j,i+1]
             else:
                 A[i-1,i-2] = -Aw
-                A[i-1,i] = -Ae
-                B[i-1,0] = Su_p + Su_velo_grad + Su_relax + Sp_wall*vol + An*u[j-1,i] + As*u[j+1,i]
+                A[i-1,i]   = -Ae
+                B[i-1,0] = SuPreGrad + relaxation + An*u[j-1,i] + As*u[j+1,i]
 
-            rmu[j,i] = Ap[j,i]*u[j,i] - (Aw*u[j,i-1] + Ae*u[j,i+1] + An*u[j-1,i] + As*u[j+1,i]) - (Su_p + Su_velo_grad + Su_relax + Sp_wall*vol)
+            rmu[j,i] = Ap[j,i]*u[j,i] - (Aw*u[j,i-1] + Ae*u[j,i+1] + An*u[j-1,i] + As*u[j+1,i]) - (SuPreGrad + relaxation)
+    
+        #SOLVE DISCRETIZED U MOMENTUM EQUATION
+        u[j,1:-1]  = (TDMA(A,B)).transpose()
 
-            
-        u[j,1:-1] = TDMA(A, B).transpose()
-        
-    #print(u.astype(float))
     return (u, Ap, rmu)
 
 def Solvev(u, v, p, rho, mu, alpha_v, xc, yc, xu, yu, xv, yv, Nx, Ny):
-    # Initialization
-    Ap = np.zeros((Ny,Nx+1))
-    A = np.zeros((Ny-2,Ny-2))
-    B = np.zeros((Ny-2,1))
-    rmv = np.zeros((Ny,Nx+1))
-
-    # Start sweeping the whole nodes
-    for i in range(1,Nx):
-        for j in range(1,Ny-1):
-            # GEOMETRY PREPARATION
-            # Face area
+    Ap      = np.zeros((Ny,Nx+1))
+    A		= np.zeros((Ny-2,Nx-2))
+    B		= np.zeros((Ny-2,1))
+    rmv     = np.zeros((Ny,Nx+1))   
+    
+    #v-momentum
+    for i in range (1,Nx):
+        for j in range (1,Ny-1):
+            #CALCULATE CELL FACES AREA
             AreaW = abs(yu[j,i-1] - yu[j+1,i-1])
-            AreaE = abs(yu[j,i] - yu[j+1,i])
-            AreaN = abs(xu[j,i] - xu[j,i-1])
+            AreaE = abs(yu[j,i]   - yu[j+1,i]) 
+            AreaN = abs(xu[j,i]   - xu[j,i-1])
             AreaS = abs(xu[j+1,i] - xu[j+1,i-1])
-
-            # Length between v-nodes
-            deltaWP = abs(xv[j,i] - xv[j,i-1])
-            deltaPE = abs(xv[j,i+1] - xv[j,i])
-            deltaNP = abs(yv[j,i] - yv[j-1,i])
-            deltaPS = abs(yv[j,i] - yv[j+1,i])
-
-            # Average cell length
-            deltaXV = 0.5*(AreaN + AreaS)
-            deltaYV = 0.5*(AreaW + AreaE)
-
-            vol = deltaXV*deltaYV                   # Cell volumes
-
-
-            # DIFFUSIVE COEFFICIENTS (D)
-            Dw = mu*AreaW/deltaWP
-            De = mu*AreaE/deltaPE
-            Dn = mu*AreaN/deltaNP
-            Ds = mu*AreaS/deltaPS
-
-
-            # CONVECTIVE COEFFICIENTS (F)
-            # average velocity
+            
+            dWP = abs(xv[j,i]   - xv[j,i-1])
+            dPE = abs(xv[j,i+1] - xv[j,i])
+            dNP = abs(yv[j-1,i] - yv[j,i])
+            dPS = abs(yv[j,i]   - yv[j+1,i])
+            
+            dxv = 0.5*(AreaN+AreaS)	   
+            dyv = 0.5*(AreaW+AreaE)
+            
+            vol	= dxv*dyv
+            
+            #CALCULATE DIFFUSIVE COEFFICIENTS
+            G       = mu
+            Dw    	= G *AreaW/dWP
+            De    	= G *AreaE/dPE
+            Dn    	= G *AreaN/dNP
+            Ds    	= G *AreaS/dPS
+            
+            #CALCULATE CONVECTIVE COEFFICIENTS
             uw = 0.5*(u[j,i-1] + u[j+1,i-1])
-            ue = 0.5*(u[j,i] + u[j+1,i])
-            vn = 0.5*(v[j,i] + v[j-1,i])
-            vs = 0.5*(v[j,i] + v[j+1,i])
+            ue = 0.5*(u[j,i]   + u[j+1,i])
+            vn = 0.5*(v[j-1,i] + v[j,i])
+            vs = 0.5*(v[j,i]   + v[j+1,i])
+            
+            Fw  = rho*uw*AreaW
+            Fe  = rho*ue*AreaE
+            Fs  = rho*vs*AreaS
+            Fn  = rho*vn*AreaN
+            
+            deltaF  = Fe - Fw + Fn - Fs
 
-            Fw = rho*uw*AreaW
-            Fe = rho*ue*AreaE
-            Fn = rho*vn*AreaN
-            Fs = rho*vs*AreaS
-
-            deltaF = Fe - Fw + Fn - Fs
+            # Hybrid scheme
+            Aw = max(Fw,(Dw+Fw/2),0)
+            Ae = max(-Fe,(De-Fe/2),0)
+            An = max(-Fn,(Dn-Fn/2),0)
+            As = max(Fs,(Ds+Fs/2),0)
+            
+            Ap[j,i] = Aw + Ae + As + An + deltaF
 
             
-            # CALCULATE SOURCE TERMS (Su)
-            # Due to pressure gradient
-            Su_p = ((p[j+1,i] - p[j,i])/deltaYV)*vol
-
-            # Due to wall
-            # If no-slip condition
-            if (i==1):
-                deltaXP = abs(xv[j,i] - xc[j,i-1])
-                Sp_wall = -mu*AreaW/deltaXP
-            elif (i==(Nx-1)):
-                deltaXP = abs(xv[j,i] - xc[j,i])
-                Sp_wall = -mu*AreaE/deltaXP
-            else:
-                Sp_wall = 0
-
-            # If slip condition, all the tau_wall = 0
-            #Sp_wall = 0
-
-            # Due to velocity gradients
-            dudx_e = (u[j,i] - u[j+1,i])/deltaYV
-            duux_w = (u[j,i-1] - u[j+1,i-1])/deltaYV
-            dvdx_n = (v[j-1,i] - v[j,i])/deltaNP
-            dvdx_s = (v[j,i] - v[j+1,i])/deltaPS
-            tau_velo_grad = mu*((dudx_e-duux_w)/deltaXV + (dvdx_n-dvdx_s)/deltaYV)
-            Su_velo_grad = tau_velo_grad*vol
-
-            # ASSEMBLY THE COEFFICIENTS
-            # Use Hybrid Scheme
-            Aw = max(Fw, (Dw + Fw/2), 0)
-            Ae = max(-Fe, (De - Fe/2), 0)
-            An = max(-Fn, (Dn - Fn/2), 0)
-            As = max(Fs, (Ds + Fs/2), 0)
-
-            Ap[j,i] = Aw + Ae + As + An + deltaF #- Sp_wall
-    
-            # Su addition due to relaxation factor
-            Su_relax = ((1-alpha_v)/alpha_v)*Ap[j,i]*v[j,i]
-
-            # Update Ap
+            #CALCULATE SOURCE TERMS
+            #Source due to pressure gradient
+            SvPreGrad = (p[j+1,i] - p[j,i])*vol/dyv
+                    
+            #Source due to relaxation factor
+            relaxation  = ((1-alpha_v)*Ap[j,i]/alpha_v)*v[j,i]
+            
+            #UNDER RELAXATION CALCULATION
             Ap[j,i] = Ap[j,i]/alpha_v
-
-            # Assembly source (B) & A matrix
+            
+            #ASSEMBLY SOURCE(B) & A MATRIX
             A[j-1,j-1] = Ap[j,i]
             
-            if (j==1):
+            if j==1:
                 A[j-1,j] = -As
-                B[j-1,0] = Su_p + Su_velo_grad + Su_relax + Sp_wall*vol + Aw*v[j,i-1] + Ae*v[j,i+1] + An*v[j-1,i]
-            elif (j==(Ny-2)):
+                B[j-1,0] = SvPreGrad + relaxation + Aw*v[j,i-1] + Ae*v[j,i+1] + An*v[j-1,i]
+            
+            elif j==Ny-2:
                 A[j-1,j-2] = -An
-                B[j-1,0] = Su_p + Su_velo_grad + Su_relax + Sp_wall*vol + Aw*v[j,i-1] + Ae*v[j,i+1] + As*v[j+1,i]
-            else:
+                B[j-1,0]   = SvPreGrad + relaxation + Aw*v[j,i-1] + Ae*v[j,i+1] + As*v[j+1,i]
+            
+            else : 
                 A[j-1,j-2] = -An
-                A[j-1,j] = -As
-                B[j-1,0] = Su_p + Su_velo_grad + Su_relax + Sp_wall*vol + Aw*v[j,i-1] + Ae*v[j,i+1]
-
-            rmv[j,i] = Ap[j,i]*v[j,i] - (Aw*v[j,i-1] + Ae*v[j,i+1] + An*v[j-1,i] + As*v[j+1,i]) - (Su_p + Su_velo_grad + Su_relax + Sp_wall*vol)
-        
-        v[1:-1,i] = TDMA(A, B).transpose()
-
+                A[j-1,j]   = -As
+                B[j-1,0]   = SvPreGrad + relaxation + Aw*v[j,i-1] + Ae*v[j,i+1]
+            
+            #CALCULATE ERROR
+            rmv[j,i] = Ap[j,i]*v[j,i] - (Aw*v[j,i-1] + Ae*v[j,i+1] + An*v[j-1,i] + As*v[j+1,i]) - (SvPreGrad + relaxation)
+            
+        #SOLVE DISCRETIZED V MOMENTUM EQUATION
+        v[1:-1,i]  = (TDMA(A,B)).transpose()
+    
     return (v, Ap, rmv)
 
 def Solvep(u, v, Apu, Apv, rho, alpha_u, alpha_v, alpha_p, xc, yc, Nx, Ny):
@@ -600,15 +541,15 @@ def Solvep(u, v, Apu, Apv, rho, alpha_u, alpha_v, alpha_p, xc, yc, Nx, Ny):
 def SIMPLEAlgorithm(us, vs, ps, pp, rho, mu, alpha_u, alpha_v, alpha_p, uInlet, uOutlet, nInlet, nOutlet,
                     nLoc, Lx, Ly, xu, yu, xv, yv, xc, yc, xs, ys, Nx, Ny):
     # 1. Solve discretised momentum equations -> us, vs
-    us, Apu, rmu = Solveu(us, vs, ps, rho, mu, alpha_u, xc, yc, xu, yu, xv, yv, Nx, Ny)
-    vs, Apv, rmv = Solvev(us, vs, ps, rho, mu, alpha_v, xc, yc, xu, yu, xv, yv, Nx, Ny)
+    un, Apu, rmu = Solveu(us, vs, ps, rho, mu, alpha_u, xc, yc, xu, yu, xv, yv, Nx, Ny)
+    vn, Apv, rmv = Solvev(us, vs, ps, rho, mu, alpha_v, xc, yc, xu, yu, xv, yv, Nx, Ny)
 
     # 2. Solve pressure correction equation -> pp
-    pp, rmp = Solvep(us, vs, Apu, Apv, rho, alpha_u, alpha_v, alpha_p, xc, yc, Nx, Ny)
+    pp, rmp = Solvep(un, vn, Apu, Apv, rho, alpha_u, alpha_v, alpha_p, xc, yc, Nx, Ny)
 
     # 3. Correct pressure and velocities
     ps = CorrectContinuity(ps, pp, alpha_p, Nx, Ny)
-    us, vs = CorrectMomentum(us, vs, pp, Apu, Apv, alpha_u, alpha_v, alpha_p,
+    us, vs = CorrectMomentum(un, vn, pp, Apu, Apv, alpha_u, alpha_v, alpha_p,
                                         xu, yu, xv, yv, Nx, Ny)
 
     # 4. Update boundary condition
